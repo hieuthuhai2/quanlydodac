@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Camera, Plus, MapPin, Clock, Trash2, ArrowLeft, Image as ImageIcon, Edit2, Package, FolderTree, X, Tag, Settings2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Camera, Plus, MapPin, Clock, Trash2, ArrowLeft, Image as ImageIcon, Edit2, Package, FolderTree, X, Tag, Settings2, AlertTriangle, CheckCircle2, Search, SearchX } from 'lucide-react';
 
 const DEFAULT_GROUPS = ['Đồ đang phơi', 'Đồ dùng hàng ngày', 'Đồ lưu kho'];
 const DEFAULT_STATUSES = ['Đang dơ', 'Đang giặt', 'Sạch', 'Chờ khô'];
@@ -16,6 +16,23 @@ const STATUS_PALETTE = {
   pink:    { badge: 'bg-pink-500 text-white',    dot: 'bg-pink-500' },
 };
 
+/**
+ * Bỏ dấu tiếng Việt + đưa về chữ thường.
+ * "Giày Chạy Bộ" -> "giay chay bo"; "Chìa khóa" -> "chia khoa"
+ */
+const removeAccents = (str) =>
+  String(str ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // xóa các dấu thanh/dấu mũ
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'd')
+    .toLowerCase()
+    .trim();
+
+// Gộp các trường cần tìm của 1 đồ vật thành 1 chuỗi đã chuẩn hóa
+const buildHaystack = (item) =>
+  removeAccents([item.name, item.location, item.group, item.status, item.notes].join(' '));
+
 export default function SmartWardrobeApp() {
   const [isClient, setIsClient] = useState(false);
   const [items, setItems] = useState([]);
@@ -24,13 +41,17 @@ export default function SmartWardrobeApp() {
   const [statusColors, setStatusColors] = useState(DEFAULT_STATUS_COLORS);
   const [newStatusColor, setNewStatusColor] = useState('slate');
   const [editingStatus, setEditingStatus] = useState(null); // { old, value }
+
+  // Tìm kiếm
+  const [searchQuery, setSearchQuery] = useState('');
+  const [chipFilter, setChipFilter] = useState(null); // { field: 'status' | 'group', value }
   
   const [activeTab, setActiveTab] = useState('items'); // 'items', 'groups', 'form'
   const [editingItem, setEditingItem] = useState(null);
 
   // Form State
   const [formData, setFormData] = useState({
-    name: '', location: '', group: '', status: DEFAULT_STATUSES[0], image: null
+    name: '', location: '', group: '', status: DEFAULT_STATUSES[0], notes: '', image: null
   });
   
   // Custom Dialog State thay thế alert/confirm
@@ -225,12 +246,59 @@ export default function SmartWardrobeApp() {
     });
   };
 
+  // ===== Tìm kiếm thông minh =====
+  const filteredItems = useMemo(() => {
+    if (chipFilter) {
+      return items.filter(i => i[chipFilter.field] === chipFilter.value);
+    }
+    const tokens = removeAccents(searchQuery).split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return items;
+    // Mọi từ khóa đều phải xuất hiện (ở bất kỳ trường nào)
+    return items.filter(i => {
+      const haystack = buildHaystack(i);
+      return tokens.every(t => haystack.includes(t));
+    });
+  }, [items, searchQuery, chipFilter]);
+
+  // Thẻ lọc nhanh: chỉ hiện trạng thái/nhóm đang có đồ vật
+  const quickChips = useMemo(() => {
+    const chips = [];
+    statuses.forEach(st => {
+      const count = items.filter(i => i.status === st).length;
+      if (count > 0) chips.push({ field: 'status', value: st, count });
+    });
+    [...groups, 'Chưa phân loại'].forEach(g => {
+      const count = items.filter(i => i.group === g).length;
+      if (count > 0) chips.push({ field: 'group', value: g, count });
+    });
+    return chips;
+  }, [items, groups, statuses]);
+
+  const clearSearch = () => { setSearchQuery(''); setChipFilter(null); };
+
+  const handleSearchChange = (e) => {
+    setSearchQuery(e.target.value);
+    setChipFilter(null); // người dùng tự gõ -> bỏ lọc theo thẻ
+  };
+
+  const toggleChip = (chip) => {
+    const isActive = chipFilter && chipFilter.field === chip.field && chipFilter.value === chip.value;
+    if (isActive) {
+      clearSearch();
+    } else {
+      setSearchQuery(chip.value);
+      setChipFilter({ field: chip.field, value: chip.value });
+    }
+  };
+
+  const isSearching = searchQuery.trim() !== '';
+
   const openForm = (item = null) => {
     if (item) {
       setFormData(item);
       setEditingItem(item);
     } else {
-      setFormData({ name: '', location: '', group: groups[0] || 'Chưa phân loại', status: statuses[0], image: null });
+      setFormData({ name: '', location: '', group: groups[0] || 'Chưa phân loại', status: statuses[0], notes: '', image: null });
       setEditingItem(null);
     }
     setActiveTab('form');
@@ -243,9 +311,51 @@ export default function SmartWardrobeApp() {
 
   const renderItemsTab = () => (
     <div className="flex flex-col h-full bg-slate-50 pb-20 animate-in fade-in duration-300">
-      <div className="bg-indigo-600 text-white p-5 rounded-b-2xl shadow-md shrink-0 sticky top-0 z-10">
+      <div className="bg-indigo-600 text-white p-5 pb-4 rounded-b-2xl shadow-md shrink-0 sticky top-0 z-10">
         <h1 className="text-2xl font-bold flex items-center"><Package className="mr-2" /> Tủ Đồ Của Tôi</h1>
-        <p className="text-indigo-200 text-sm mt-1">Tổng số: {items.length} món đồ</p>
+        <p className="text-indigo-200 text-sm mt-1">
+          {isSearching ? `Tìm thấy ${filteredItems.length} / ${items.length} món đồ` : `Tổng số: ${items.length} món đồ`}
+        </p>
+
+        {/* Thanh tìm kiếm */}
+        <div className="relative mt-3">
+          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            enterKeyHint="search"
+            value={searchQuery}
+            onChange={handleSearchChange}
+            placeholder="Tìm tên, vị trí, nhóm, ghi chú..."
+            className="w-full pl-10 pr-10 py-3 rounded-xl bg-white text-slate-800 placeholder-slate-400 text-sm outline-none focus:ring-2 focus:ring-indigo-300 shadow-sm"
+          />
+          {searchQuery && (
+            <button onClick={clearSearch} aria-label="Xóa tìm kiếm" className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 active:scale-90 transition">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        {/* Thẻ lọc nhanh */}
+        {quickChips.length > 0 && (
+          <div className="flex gap-2 mt-3 overflow-x-auto pb-1 -mx-1 px-1">
+            {quickChips.map(chip => {
+              const active = chipFilter && chipFilter.field === chip.field && chipFilter.value === chip.value;
+              return (
+                <button
+                  key={chip.field + chip.value}
+                  onClick={() => toggleChip(chip)}
+                  className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border transition active:scale-95 ${active ? 'bg-white text-indigo-700 border-white' : 'bg-white/15 text-white border-white/30 hover:bg-white/25'}`}
+                >
+                  {chip.field === 'status'
+                    ? <span className={`w-2 h-2 rounded-full ${(STATUS_PALETTE[statusColors[chip.value]] || STATUS_PALETTE.slate).dot} ${active ? '' : 'ring-1 ring-white/70'}`} />
+                    : <FolderTree size={12} />}
+                  {chip.value}
+                  <span className={`text-[10px] ${active ? 'text-indigo-400' : 'text-indigo-200'}`}>{chip.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -254,8 +364,21 @@ export default function SmartWardrobeApp() {
             <ImageIcon size={48} className="mb-3 opacity-50" />
             <p>Chưa có đồ vật nào. Hãy thêm mới!</p>
           </div>
+        ) : filteredItems.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center py-12 px-4 text-slate-500">
+            <div className="w-16 h-16 rounded-full bg-slate-100 flex items-center justify-center mb-4">
+              <SearchX size={32} className="text-slate-400" />
+            </div>
+            <p className="font-medium text-slate-700 leading-relaxed">
+              Không tìm thấy đồ vật nào phù hợp với từ khóa <span className="font-bold text-indigo-600 break-words">“{searchQuery}”</span>
+            </p>
+            <p className="text-xs text-slate-400 mt-2">Thử gõ ngắn hơn hoặc dùng từ khóa khác (không cần gõ dấu).</p>
+            <button onClick={clearSearch} className="mt-5 px-5 py-2.5 bg-indigo-600 text-white rounded-xl font-bold text-sm shadow hover:bg-indigo-700 active:scale-95 transition">
+              Xóa tìm kiếm
+            </button>
+          </div>
         ) : (
-          items.map((item) => (
+          filteredItems.map((item) => (
             <div key={item.id} className="bg-white rounded-xl shadow-sm border border-slate-100 flex p-3 relative transition-all">
               <div className="w-24 h-24 rounded-lg bg-slate-100 shrink-0 overflow-hidden relative">
                 {item.image ? (
@@ -264,21 +387,24 @@ export default function SmartWardrobeApp() {
                   <div className="w-full h-full flex items-center justify-center text-slate-400"><ImageIcon size={28} /></div>
                 )}
               </div>
-              <div className="ml-3 flex-1 flex flex-col justify-between">
+              <div className="ml-3 flex-1 min-w-0 flex flex-col justify-between">
                 <div>
-                  <h3 className="font-bold text-slate-800 pr-12 line-clamp-1">{item.name}</h3>
-                  <div className="flex items-center text-xs text-slate-500 mt-1">
-                    <FolderTree size={12} className="mr-1" /> {item.group}
+                  <h3 className="font-bold text-slate-800 pr-20 line-clamp-1">{item.name}</h3>
+                  <div className="inline-flex items-center max-w-full text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-100 px-2 py-1 rounded-md mt-1">
+                    <span className="mr-1">📍</span><span className="truncate">{item.location || 'Chưa rõ vị trí'}</span>
                   </div>
-                  <div className="flex items-center text-xs text-slate-500 mt-0.5">
-                    <MapPin size={12} className="mr-1" /> {item.location || 'Chưa rõ vị trí'}
+                  <div className="flex items-center text-xs text-slate-500 mt-1.5">
+                    <FolderTree size={12} className="mr-1 shrink-0" /> <span className="truncate">{item.group}</span>
                   </div>
+                  {item.notes && (
+                    <p className="text-xs text-slate-400 italic mt-0.5 line-clamp-1">“{item.notes}”</p>
+                  )}
                 </div>
                 <div className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md flex items-center self-start mt-2 border border-emerald-100">
                   <Clock size={12} className="mr-1" /> {formatTime(item.updatedAt)}
                 </div>
               </div>
-              
+
               {/* Badge & Actions */}
               <div className="absolute top-3 right-3 flex flex-col items-end gap-2">
                 <span className={`text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide ${getBadgeClass(item.status)}`}>
@@ -432,6 +558,11 @@ export default function SmartWardrobeApp() {
             <MapPin size={20} className="absolute left-3.5 top-3.5 text-slate-400" />
             <input type="text" placeholder="Ví dụ: Máy giặt, Ban công..." className="w-full pl-11 p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition" value={formData.location} onChange={(e) => setFormData({...formData, location: e.target.value})} />
           </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-bold text-slate-700 mb-1">Ghi chú</label>
+          <textarea rows={3} placeholder="Ví dụ: Cần dùng cuối tuần, của bé..." className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition resize-none" value={formData.notes || ''} onChange={(e) => setFormData({...formData, notes: e.target.value})} />
         </div>
       </div>
 
