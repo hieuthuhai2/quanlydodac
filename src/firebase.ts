@@ -11,12 +11,12 @@ import {
 // Lấy ở: Firebase Console → Project settings → Your apps → Web app
 // ============================================================
 export const firebaseConfig = {
-  apiKey: 'DIEN_VAO_DAY',
-  authDomain: 'DIEN_VAO_DAY',
-  projectId: 'DIEN_VAO_DAY',
-  storageBucket: 'DIEN_VAO_DAY',
-  messagingSenderId: 'DIEN_VAO_DAY',
-  appId: 'DIEN_VAO_DAY',
+  apiKey: 'AIzaSyDZbPzN7473GlIk6hL0oa-I3hsvmUHu6-o',
+  authDomain: 'quanlydodacc.firebaseapp.com',
+  projectId: 'quanlydodacc',
+  storageBucket: 'quanlydodacc.firebasestorage.app',
+  messagingSenderId: '162107035134',
+  appId: '1:162107035134:web:3d56f9db08a2fa6a0484af',
 };
 
 // Chưa điền cấu hình -> app chạy chế độ lưu trên máy như cũ (không đăng nhập)
