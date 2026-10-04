@@ -3,12 +3,27 @@ import { Camera, Plus, MapPin, Clock, Trash2, ArrowLeft, Image as ImageIcon, Edi
 
 const DEFAULT_GROUPS = ['Đồ đang phơi', 'Đồ dùng hàng ngày', 'Đồ lưu kho'];
 const DEFAULT_STATUSES = ['Đang dơ', 'Đang giặt', 'Sạch', 'Chờ khô'];
+const DEFAULT_STATUS_COLORS = { 'Đang dơ': 'red', 'Đang giặt': 'sky', 'Sạch': 'emerald', 'Chờ khô': 'amber' };
+
+// Bảng màu trạng thái (viết đầy đủ class để Tailwind nhận diện)
+const STATUS_PALETTE = {
+  slate:   { badge: 'bg-slate-700 text-white',   dot: 'bg-slate-700' },
+  red:     { badge: 'bg-red-500 text-white',     dot: 'bg-red-500' },
+  amber:   { badge: 'bg-amber-500 text-white',   dot: 'bg-amber-500' },
+  emerald: { badge: 'bg-emerald-600 text-white', dot: 'bg-emerald-600' },
+  sky:     { badge: 'bg-sky-500 text-white',     dot: 'bg-sky-500' },
+  violet:  { badge: 'bg-violet-600 text-white',  dot: 'bg-violet-600' },
+  pink:    { badge: 'bg-pink-500 text-white',    dot: 'bg-pink-500' },
+};
 
 export default function SmartWardrobeApp() {
   const [isClient, setIsClient] = useState(false);
   const [items, setItems] = useState([]);
   const [groups, setGroups] = useState([]);
-  const [statuses] = useState(DEFAULT_STATUSES);
+  const [statuses, setStatuses] = useState(DEFAULT_STATUSES);
+  const [statusColors, setStatusColors] = useState(DEFAULT_STATUS_COLORS);
+  const [newStatusColor, setNewStatusColor] = useState('slate');
+  const [editingStatus, setEditingStatus] = useState(null); // { old, value }
   
   const [activeTab, setActiveTab] = useState('items'); // 'items', 'groups', 'form'
   const [editingItem, setEditingItem] = useState(null);
@@ -29,6 +44,8 @@ export default function SmartWardrobeApp() {
         const parsed = JSON.parse(savedData);
         setItems(parsed.items || []);
         setGroups(parsed.groups || DEFAULT_GROUPS);
+        if (parsed.statuses && parsed.statuses.length > 0) setStatuses(parsed.statuses);
+        if (parsed.statusColors) setStatusColors(parsed.statusColors);
       } catch (e) {
         console.error("Error parsing local storage data");
       }
@@ -40,12 +57,12 @@ export default function SmartWardrobeApp() {
   useEffect(() => {
     if (isClient) {
       try {
-        localStorage.setItem('smart_wardrobe_data', JSON.stringify({ items, groups }));
+        localStorage.setItem('smart_wardrobe_data', JSON.stringify({ items, groups, statuses, statusColors }));
       } catch (e) {
         showDialog('alert', 'Bộ nhớ đã đầy! Vui lòng xóa bớt hình ảnh cũ để tiếp tục.');
       }
     }
-  }, [items, groups, isClient]);
+  }, [items, groups, statuses, statusColors, isClient]);
 
   const showDialog = (type, message, onConfirm = null) => {
     setDialog({ isOpen: true, type, message, onConfirm, onCancel: () => setDialog({ ...dialog, isOpen: false }) });
@@ -153,6 +170,61 @@ export default function SmartWardrobeApp() {
     }
   };
 
+  // ===== Quản lý trạng thái =====
+  const getBadgeClass = (status) => (STATUS_PALETTE[statusColors[status]] || STATUS_PALETTE.slate).badge;
+
+  const addStatus = (e) => {
+    e.preventDefault();
+    const name = e.target.elements.statusName.value.trim();
+    if (!name) return;
+    if (statuses.includes(name)) {
+      showDialog('alert', 'Trạng thái này đã tồn tại!');
+      return;
+    }
+    setStatuses([...statuses, name]);
+    setStatusColors({ ...statusColors, [name]: newStatusColor });
+    e.target.reset();
+  };
+
+  const renameStatus = () => {
+    if (!editingStatus) return;
+    const oldName = editingStatus.old;
+    const newName = editingStatus.value.trim();
+    if (!newName || newName === oldName) { setEditingStatus(null); return; }
+    if (statuses.includes(newName)) {
+      showDialog('alert', 'Trạng thái này đã tồn tại!');
+      return;
+    }
+    setStatuses(statuses.map(st => st === oldName ? newName : st));
+    setItems(items.map(i => i.status === oldName ? { ...i, status: newName } : i));
+    const { [oldName]: oldColor, ...restColors } = statusColors;
+    setStatusColors({ ...restColors, [newName]: oldColor || 'slate' });
+    setEditingStatus(null);
+  };
+
+  const changeStatusColor = (name, colorKey) => {
+    setStatusColors({ ...statusColors, [name]: colorKey });
+  };
+
+  const deleteStatus = (name) => {
+    if (statuses.length <= 1) {
+      showDialog('alert', 'Phải giữ lại ít nhất 1 trạng thái!');
+      return;
+    }
+    const fallback = statuses.find(st => st !== name);
+    const usedCount = items.filter(i => i.status === name).length;
+    const msg = usedCount > 0
+      ? `Có ${usedCount} đồ vật đang ở trạng thái "${name}". Xóa sẽ chuyển chúng sang "${fallback}". Tiếp tục?`
+      : `Bạn muốn xóa trạng thái "${name}"?`;
+    showDialog('confirm', msg, () => {
+      setStatuses(statuses.filter(st => st !== name));
+      setItems(items.map(i => i.status === name ? { ...i, status: fallback } : i));
+      const { [name]: removed, ...restColors } = statusColors;
+      setStatusColors(restColors);
+      closeDialog();
+    });
+  };
+
   const openForm = (item = null) => {
     if (item) {
       setFormData(item);
@@ -209,7 +281,7 @@ export default function SmartWardrobeApp() {
               
               {/* Badge & Actions */}
               <div className="absolute top-3 right-3 flex flex-col items-end gap-2">
-                <span className="text-[10px] font-bold px-2 py-1 bg-slate-800 text-white rounded-md uppercase tracking-wide">
+                <span className={`text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wide ${getBadgeClass(item.status)}`}>
                   {item.status}
                 </span>
                 <div className="flex gap-1">
@@ -372,6 +444,68 @@ export default function SmartWardrobeApp() {
     </div>
   );
 
+  const renderStatusTab = () => (
+    <div className="flex flex-col h-full bg-slate-50 pb-20 animate-in fade-in duration-300">
+      <div className="bg-violet-600 text-white p-5 rounded-b-2xl shadow-md shrink-0 sticky top-0 z-10">
+        <h1 className="text-2xl font-bold flex items-center"><Tag className="mr-2" /> Quản lý Trạng thái</h1>
+        <p className="text-violet-200 text-sm mt-1">Thêm, đổi tên, đổi màu hoặc xóa trạng thái</p>
+      </div>
+
+      <div className="p-4 flex-1 overflow-y-auto space-y-4">
+        <form onSubmit={addStatus} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
+          <label className="block text-sm font-semibold text-slate-700 mb-2">Thêm trạng thái mới</label>
+          <div className="flex gap-2">
+            <input type="text" name="statusName" placeholder="VD: Cần ủi, Đang sửa..." className="flex-1 min-w-0 p-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 outline-none text-sm" />
+            <button type="submit" className="bg-violet-600 text-white px-4 rounded-lg font-semibold hover:bg-violet-700 active:scale-95 transition-all">Thêm</button>
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <span className="text-xs text-slate-500 mr-1">Màu:</span>
+            {Object.keys(STATUS_PALETTE).map(key => (
+              <button type="button" key={key} onClick={() => setNewStatusColor(key)}
+                className={`w-7 h-7 rounded-full ${STATUS_PALETTE[key].dot} ${newStatusColor === key ? 'ring-2 ring-offset-2 ring-violet-500' : ''}`} />
+            ))}
+          </div>
+        </form>
+
+        <div className="space-y-3">
+          {statuses.map(st => {
+            const count = items.filter(i => i.status === st).length;
+            const isEditing = editingStatus && editingStatus.old === st;
+            return (
+              <div key={st} className="bg-white rounded-xl shadow-sm border border-slate-200 p-3">
+                <div className="flex items-center gap-2">
+                  {isEditing ? (
+                    <>
+                      <input autoFocus type="text" value={editingStatus.value}
+                        onChange={(e) => setEditingStatus({ ...editingStatus, value: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === 'Enter') renameStatus(); }}
+                        className="flex-1 min-w-0 p-2 border border-violet-300 rounded-lg focus:ring-2 focus:ring-violet-500 outline-none text-sm" />
+                      <button onClick={renameStatus} className="px-3 py-2 bg-violet-600 text-white rounded-lg text-sm font-bold">Lưu</button>
+                      <button onClick={() => setEditingStatus(null)} className="p-2 text-slate-400"><X size={18} /></button>
+                    </>
+                  ) : (
+                    <>
+                      <span className={`text-xs font-bold px-2.5 py-1 rounded-md uppercase tracking-wide ${getBadgeClass(st)}`}>{st}</span>
+                      <span className="text-xs text-slate-400 flex-1">{count} món</span>
+                      <button onClick={() => setEditingStatus({ old: st, value: st })} className="p-1.5 text-blue-500 bg-blue-50 rounded-md hover:bg-blue-100"><Edit2 size={16} /></button>
+                      <button onClick={() => deleteStatus(st)} className="p-1.5 text-red-500 bg-red-50 rounded-md hover:bg-red-100"><Trash2 size={16} /></button>
+                    </>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mt-3">
+                  {Object.keys(STATUS_PALETTE).map(key => (
+                    <button key={key} onClick={() => changeStatusColor(st, key)}
+                      className={`w-6 h-6 rounded-full ${STATUS_PALETTE[key].dot} ${(statusColors[st] || 'slate') === key ? 'ring-2 ring-offset-2 ring-violet-500' : ''}`} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+
   const renderDialog = () => {
     if (!dialog.isOpen) return null;
     return (
@@ -401,13 +535,17 @@ export default function SmartWardrobeApp() {
 
   const renderBottomNav = () => (
     <div className="absolute bottom-0 w-full bg-white/95 backdrop-blur-md border-t border-slate-200 flex justify-around items-center h-[72px] pb-safe z-10 shadow-[0_-10px_20px_-10px_rgba(0,0,0,0.05)]">
-      <button onClick={() => openTab('items')} className={`flex flex-col items-center justify-center w-1/2 py-2 transition-colors ${activeTab === 'items' ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>
+      <button onClick={() => openTab('items')} className={`flex flex-col items-center justify-center w-1/3 py-2 transition-colors ${activeTab === 'items' ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>
         <div className={`p-1.5 rounded-xl mb-1 ${activeTab === 'items' ? 'bg-indigo-100' : ''}`}><Package size={22} className={activeTab === 'items' ? 'stroke-[2.5]' : ''} /></div>
         <span className={`text-[11px] ${activeTab === 'items' ? 'font-bold' : 'font-medium'}`}>Đồ vật</span>
       </button>
-      <button onClick={() => openTab('groups')} className={`flex flex-col items-center justify-center w-1/2 py-2 transition-colors ${activeTab === 'groups' ? 'text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>
+      <button onClick={() => openTab('groups')} className={`flex flex-col items-center justify-center w-1/3 py-2 transition-colors ${activeTab === 'groups' ? 'text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}>
         <div className={`p-1.5 rounded-xl mb-1 ${activeTab === 'groups' ? 'bg-emerald-100' : ''}`}><Settings2 size={22} className={activeTab === 'groups' ? 'stroke-[2.5]' : ''} /></div>
         <span className={`text-[11px] ${activeTab === 'groups' ? 'font-bold' : 'font-medium'}`}>Quản lý Nhóm</span>
+      </button>
+      <button onClick={() => openTab('status')} className={`flex flex-col items-center justify-center w-1/3 py-2 transition-colors ${activeTab === 'status' ? 'text-violet-600' : 'text-slate-400 hover:text-slate-600'}`}>
+        <div className={`p-1.5 rounded-xl mb-1 ${activeTab === 'status' ? 'bg-violet-100' : ''}`}><Tag size={22} className={activeTab === 'status' ? 'stroke-[2.5]' : ''} /></div>
+        <span className={`text-[11px] ${activeTab === 'status' ? 'font-bold' : 'font-medium'}`}>Trạng thái</span>
       </button>
     </div>
   );
@@ -420,6 +558,7 @@ export default function SmartWardrobeApp() {
         {/* Vùng hiển thị View chính */}
         {activeTab === 'items' && renderItemsTab()}
         {activeTab === 'groups' && renderGroupsTab()}
+        {activeTab === 'status' && renderStatusTab()}
         {activeTab === 'form' && renderForm()}
 
         {/* Navigation & Dialog */}
