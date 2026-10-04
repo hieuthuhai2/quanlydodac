@@ -1,5 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Camera, Plus, MapPin, Clock, Trash2, ArrowLeft, Image as ImageIcon, Edit2, Package, FolderTree, X, Tag, Settings2, AlertTriangle, CheckCircle2, Search, SearchX } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { Camera, Plus, MapPin, Clock, Trash2, ArrowLeft, Image as ImageIcon, Edit2, Package, FolderTree, X, Tag, Settings2, AlertTriangle, CheckCircle2, Search, SearchX, LogOut, Lock, User, Cloud, CloudOff, Loader2 } from 'lucide-react';
+import { onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { collection, doc, onSnapshot, setDoc, deleteDoc } from 'firebase/firestore';
+import { auth, db, FIREBASE_ENABLED } from './firebase';
+
+const LOCAL_KEY = 'smart_wardrobe_data';
+const BACKUP_KEY = 'smart_wardrobe_data_backup';
 
 const DEFAULT_GROUPS = ['Đồ đang phơi', 'Đồ dùng hàng ngày', 'Đồ lưu kho'];
 const DEFAULT_STATUSES = ['Đang dơ', 'Đang giặt', 'Sạch', 'Chờ khô'];
@@ -33,14 +39,135 @@ const removeAccents = (str) =>
 const buildHaystack = (item) =>
   removeAccents([item.name, item.location, item.group, item.status, item.notes].join(' '));
 
+// ===== Tiện ích đồng bộ / đăng nhập =====
+// Firebase Auth cần email -> ghép tên đăng nhập thành email ảo (không gửi mail thật)
+const normalizeUsername = (u) => removeAccents(u).replace(/\s+/g, '');
+const toEmail = (u) => `${normalizeUsername(u)}@tudo.app`;
+const isValidUsername = (u) => /^[a-z0-9._-]{3,30}$/.test(normalizeUsername(u));
+
+// JSON ổn định (sắp xếp khóa) để so sánh dữ liệu trước/sau khi đồng bộ
+const stable = (o) => JSON.stringify(o, Object.keys(o).sort());
+// Firestore không nhận giá trị undefined
+const clean = (o) => JSON.parse(JSON.stringify(o));
+
+const authErrorMessage = (code) => {
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+    case 'auth/invalid-email':
+      return 'Sai tên đăng nhập hoặc mật khẩu.';
+    case 'auth/email-already-in-use':
+      return 'Tên đăng nhập này đã có người dùng. Hãy chọn tên khác.';
+    case 'auth/weak-password':
+      return 'Mật khẩu quá yếu (cần ít nhất 6 ký tự).';
+    case 'auth/network-request-failed':
+      return 'Không có kết nối mạng. Vui lòng thử lại.';
+    case 'auth/too-many-requests':
+      return 'Thử quá nhiều lần. Vui lòng đợi một lúc rồi thử lại.';
+    case 'auth/operation-not-allowed':
+      return 'Chưa bật đăng nhập Email/Password trong Firebase.';
+    default:
+      return 'Có lỗi xảy ra: ' + (code || 'không rõ');
+  }
+};
+
+function AuthScreen() {
+  const [mode, setMode] = useState('login'); // 'login' | 'register'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!isValidUsername(username)) {
+      setError('Tên đăng nhập gồm 3-30 ký tự: chữ không dấu, số, dấu chấm, gạch ngang hoặc gạch dưới.');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Mật khẩu cần ít nhất 6 ký tự.');
+      return;
+    }
+    if (mode === 'register' && password !== confirm) {
+      setError('Mật khẩu nhập lại không khớp.');
+      return;
+    }
+    setLoading(true);
+    try {
+      if (mode === 'login') {
+        await signInWithEmailAndPassword(auth, toEmail(username), password);
+      } else {
+        await createUserWithEmailAndPassword(auth, toEmail(username), password);
+      }
+    } catch (err) {
+      setError(authErrorMessage(err.code));
+      setLoading(false);
+    }
+  };
+
+  const inputCls = 'w-full pl-11 p-3.5 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none transition';
+
+  return (
+    <div className="h-full flex flex-col justify-center bg-gradient-to-b from-indigo-600 to-indigo-800 px-6">
+      <div className="text-center text-white mb-6">
+        <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-white/15 flex items-center justify-center"><Package size={34} /></div>
+        <h1 className="text-2xl font-bold">Tủ Đồ Thông Minh</h1>
+        <p className="text-indigo-200 text-sm mt-1">Đăng nhập để đồng bộ giữa các thiết bị</p>
+      </div>
+
+      <form onSubmit={submit} className="bg-white rounded-2xl shadow-2xl p-5 space-y-4">
+        <div className="grid grid-cols-2 bg-slate-100 rounded-xl p-1 text-sm font-bold">
+          <button type="button" onClick={() => { setMode('login'); setError(''); }} className={`py-2 rounded-lg transition ${mode === 'login' ? 'bg-white text-indigo-600 shadow' : 'text-slate-500'}`}>Đăng nhập</button>
+          <button type="button" onClick={() => { setMode('register'); setError(''); }} className={`py-2 rounded-lg transition ${mode === 'register' ? 'bg-white text-indigo-600 shadow' : 'text-slate-500'}`}>Đăng ký</button>
+        </div>
+
+        <div className="relative">
+          <User size={20} className="absolute left-3.5 top-3.5 text-slate-400" />
+          <input type="text" autoCapitalize="none" autoCorrect="off" autoComplete="username" placeholder="Tên đăng nhập" className={inputCls} value={username} onChange={(e) => setUsername(e.target.value)} />
+        </div>
+        <div className="relative">
+          <Lock size={20} className="absolute left-3.5 top-3.5 text-slate-400" />
+          <input type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} placeholder="Mật khẩu" className={inputCls} value={password} onChange={(e) => setPassword(e.target.value)} />
+        </div>
+        {mode === 'register' && (
+          <div className="relative">
+            <Lock size={20} className="absolute left-3.5 top-3.5 text-slate-400" />
+            <input type="password" autoComplete="new-password" placeholder="Nhập lại mật khẩu" className={inputCls} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </div>
+        )}
+
+        {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-lg p-3">{error}</div>}
+
+        <button type="submit" disabled={loading} className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-xl shadow hover:bg-indigo-700 active:scale-[0.98] transition flex justify-center items-center disabled:opacity-60">
+          {loading ? <Loader2 size={20} className="animate-spin" /> : (mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản')}
+        </button>
+
+        {mode === 'register' && (
+          <p className="text-xs text-slate-400 leading-relaxed">Lưu ý: không có email nên <b>không thể lấy lại mật khẩu</b> nếu quên. Hãy ghi nhớ cẩn thận.</p>
+        )}
+      </form>
+    </div>
+  );
+}
+
 export default function SmartWardrobeApp() {
   const [isClient, setIsClient] = useState(false);
   const [items, setItems] = useState([]);
-  const [groups, setGroups] = useState([]);
+  const [groups, setGroups] = useState(DEFAULT_GROUPS);
   const [statuses, setStatuses] = useState(DEFAULT_STATUSES);
   const [statusColors, setStatusColors] = useState(DEFAULT_STATUS_COLORS);
   const [newStatusColor, setNewStatusColor] = useState('slate');
   const [editingStatus, setEditingStatus] = useState(null); // { old, value }
+
+  // Đăng nhập & đồng bộ đám mây
+  const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(!FIREBASE_ENABLED);
+  const [cloudReady, setCloudReady] = useState(false);
+  const [online, setOnline] = useState(true);
+  const synced = useRef({ items: new Map(), settings: '' });
 
   // Tìm kiếm
   const [searchQuery, setSearchQuery] = useState('');
@@ -59,7 +186,8 @@ export default function SmartWardrobeApp() {
 
   useEffect(() => {
     setIsClient(true);
-    const savedData = localStorage.getItem('smart_wardrobe_data');
+    if (FIREBASE_ENABLED) return; // chế độ đám mây: dữ liệu lấy từ Firestore
+    const savedData = localStorage.getItem(LOCAL_KEY);
     if (savedData) {
       try {
         const parsed = JSON.parse(savedData);
@@ -76,14 +204,146 @@ export default function SmartWardrobeApp() {
   }, []);
 
   useEffect(() => {
-    if (isClient) {
+    if (isClient && !FIREBASE_ENABLED) {
       try {
-        localStorage.setItem('smart_wardrobe_data', JSON.stringify({ items, groups, statuses, statusColors }));
+        localStorage.setItem(LOCAL_KEY, JSON.stringify({ items, groups, statuses, statusColors }));
       } catch (e) {
         showDialog('alert', 'Bộ nhớ đã đầy! Vui lòng xóa bớt hình ảnh cũ để tiếp tục.');
       }
     }
   }, [items, groups, statuses, statusColors, isClient]);
+
+  // ===== Theo dõi mạng =====
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    setOnline(navigator.onLine);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+
+  // ===== Theo dõi trạng thái đăng nhập =====
+  useEffect(() => {
+    if (!FIREBASE_ENABLED) return;
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (!u) {
+        // Đăng xuất: xóa dữ liệu trên màn hình (dữ liệu vẫn còn trên đám mây)
+        setCloudReady(false);
+        setItems([]);
+        setGroups(DEFAULT_GROUPS);
+        setStatuses(DEFAULT_STATUSES);
+        setStatusColors(DEFAULT_STATUS_COLORS);
+        setActiveTab('items');
+        setSearchQuery('');
+        setChipFilter(null);
+      }
+      setAuthReady(true);
+    });
+  }, []);
+
+  // ===== Nhận dữ liệu realtime từ Firestore =====
+  useEffect(() => {
+    if (!FIREBASE_ENABLED || !user) return;
+    setCloudReady(false);
+    synced.current = { items: new Map(), settings: '' };
+
+    const loaded = { items: false, settings: false };
+    const cloud = { itemCount: 0, hasSettings: false };
+    let initialized = false;
+
+    const finishIfReady = () => {
+      if (initialized || !loaded.items || !loaded.settings) return;
+      initialized = true;
+      // Tài khoản mới + còn dữ liệu cũ trên máy -> chuyển lên đám mây
+      if (cloud.itemCount === 0 && !cloud.hasSettings) {
+        const raw = localStorage.getItem(LOCAL_KEY);
+        if (raw) {
+          try {
+            const p = JSON.parse(raw);
+            if ((p.items && p.items.length) || p.groups) {
+              setItems(p.items || []);
+              setGroups(p.groups || DEFAULT_GROUPS);
+              if (p.statuses && p.statuses.length) setStatuses(p.statuses);
+              if (p.statusColors) setStatusColors(p.statusColors);
+              localStorage.setItem(BACKUP_KEY, raw); // giữ bản sao lưu
+              localStorage.removeItem(LOCAL_KEY);
+            }
+          } catch (e) { console.error('Không đọc được dữ liệu cũ', e); }
+        }
+      }
+      setCloudReady(true);
+    };
+
+    const unsubItems = onSnapshot(collection(db, 'users', user.uid, 'items'), (snap) => {
+      const arr = snap.docs.map(d => d.data());
+      arr.sort((a, b) => Number(b.id) - Number(a.id)); // mới nhất lên đầu
+      synced.current.items = new Map(arr.map(i => [i.id, stable(i)]));
+      cloud.itemCount = arr.length;
+      setItems(arr);
+      loaded.items = true;
+      finishIfReady();
+    }, (err) => console.error('Lỗi đọc đồ vật:', err));
+
+    const unsubSettings = onSnapshot(doc(db, 'users', user.uid, 'meta', 'settings'), (snap) => {
+      if (snap.exists()) {
+        const d = snap.data();
+        const g = d.groups || DEFAULT_GROUPS;
+        const st = d.statuses && d.statuses.length ? d.statuses : DEFAULT_STATUSES;
+        let colors = DEFAULT_STATUS_COLORS;
+        try { colors = JSON.parse(d.statusColors || '{}'); } catch (e) {}
+        synced.current.settings = JSON.stringify({ groups: g, statuses: st, statusColors: colors });
+        setGroups(g);
+        setStatuses(st);
+        setStatusColors(colors);
+        cloud.hasSettings = true;
+      } else {
+        cloud.hasSettings = false;
+      }
+      loaded.settings = true;
+      finishIfReady();
+    }, (err) => console.error('Lỗi đọc cài đặt:', err));
+
+    return () => { unsubItems(); unsubSettings(); };
+  }, [user]);
+
+  // ===== Ghi thay đổi lên Firestore (chỉ ghi phần khác biệt) =====
+  useEffect(() => {
+    if (!FIREBASE_ENABLED || !user || !cloudReady) return;
+    const uid = user.uid;
+
+    const current = new Map();
+    items.forEach(i => current.set(i.id, stable(clean(i))));
+
+    current.forEach((str, id) => {
+      if (synced.current.items.get(id) !== str) {
+        synced.current.items.set(id, str);
+        setDoc(doc(db, 'users', uid, 'items', id), JSON.parse(str)).catch(e => console.error('Lỗi lưu:', e));
+      }
+    });
+    synced.current.items.forEach((_, id) => {
+      if (!current.has(id)) {
+        synced.current.items.delete(id);
+        deleteDoc(doc(db, 'users', uid, 'items', id)).catch(e => console.error('Lỗi xóa:', e));
+      }
+    });
+
+    const settingsStr = JSON.stringify({ groups, statuses, statusColors });
+    if (synced.current.settings !== settingsStr) {
+      synced.current.settings = settingsStr;
+      setDoc(doc(db, 'users', uid, 'meta', 'settings'), {
+        groups, statuses, statusColors: JSON.stringify(statusColors),
+      }).catch(e => console.error('Lỗi lưu cài đặt:', e));
+    }
+  }, [items, groups, statuses, statusColors, cloudReady, user]);
+
+  const confirmLogout = () => {
+    showDialog('confirm', 'Đăng xuất khỏi tài khoản này? Dữ liệu vẫn được lưu an toàn trên đám mây.', () => {
+      closeDialog();
+      signOut(auth);
+    });
+  };
 
   const showDialog = (type, message, onConfirm = null) => {
     setDialog({ isOpen: true, type, message, onConfirm, onCancel: () => setDialog({ ...dialog, isOpen: false }) });
@@ -312,7 +572,16 @@ export default function SmartWardrobeApp() {
   const renderItemsTab = () => (
     <div className="flex flex-col h-full bg-slate-50 pb-20 animate-in fade-in duration-300">
       <div className="bg-indigo-600 text-white p-5 pb-4 rounded-b-2xl shadow-md shrink-0 sticky top-0 z-10">
-        <h1 className="text-2xl font-bold flex items-center"><Package className="mr-2" /> Tủ Đồ Của Tôi</h1>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-xl font-bold flex items-center min-w-0"><Package className="mr-2 shrink-0" /> <span className="truncate">Tủ Đồ Của Tôi</span></h1>
+          {FIREBASE_ENABLED && user && (
+            <button onClick={confirmLogout} className="shrink-0 flex items-center gap-1.5 bg-white/15 border border-white/25 px-2.5 py-1.5 rounded-full text-xs font-semibold active:scale-95 transition">
+              {online ? <Cloud size={14} /> : <CloudOff size={14} />}
+              <span className="max-w-[80px] truncate">{(user.email || '').split('@')[0]}</span>
+              <LogOut size={14} />
+            </button>
+          )}
+        </div>
         <p className="text-indigo-200 text-sm mt-1">
           {isSearching ? `Tìm thấy ${filteredItems.length} / ${items.length} món đồ` : `Tổng số: ${items.length} món đồ`}
         </p>
@@ -681,21 +950,39 @@ export default function SmartWardrobeApp() {
     </div>
   );
 
-  return (
+  const frame = (children) => (
     <div className="min-h-screen bg-slate-900 flex justify-center items-center p-0 sm:p-4 selection:bg-indigo-200 font-sans">
       <div className="w-full h-[100dvh] sm:h-[850px] max-w-[400px] bg-white sm:rounded-[2.5rem] shadow-2xl relative overflow-hidden sm:border-[8px] border-slate-800">
         <div className="hidden sm:block absolute top-0 inset-x-0 h-6 bg-slate-800 rounded-b-2xl w-40 mx-auto z-[60]"></div>
-        
-        {/* Vùng hiển thị View chính */}
-        {activeTab === 'items' && renderItemsTab()}
-        {activeTab === 'groups' && renderGroupsTab()}
-        {activeTab === 'status' && renderStatusTab()}
-        {activeTab === 'form' && renderForm()}
-
-        {/* Navigation & Dialog */}
-        {activeTab !== 'form' && renderBottomNav()}
-        {renderDialog()}
+        {children}
       </div>
     </div>
+  );
+
+  const loadingView = (text) => (
+    <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-3">
+      <Loader2 size={32} className="animate-spin text-indigo-500" />
+      <p className="text-sm">{text}</p>
+    </div>
+  );
+
+  if (FIREBASE_ENABLED) {
+    if (!authReady) return frame(loadingView('Đang khởi động...'));
+    if (!user) return frame(<AuthScreen />);
+    if (!cloudReady) return frame(loadingView('Đang tải dữ liệu...'));
+  }
+
+  return frame(
+    <>
+      {/* Vùng hiển thị View chính */}
+      {activeTab === 'items' && renderItemsTab()}
+      {activeTab === 'groups' && renderGroupsTab()}
+      {activeTab === 'status' && renderStatusTab()}
+      {activeTab === 'form' && renderForm()}
+
+      {/* Navigation & Dialog */}
+      {activeTab !== 'form' && renderBottomNav()}
+      {renderDialog()}
+    </>
   );
 }
