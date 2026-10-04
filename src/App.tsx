@@ -83,8 +83,9 @@ export default function SmartWardrobeApp() {
     const file = e.target.files[0];
     if (file) {
       const compressedImage = await compressImage(file);
-      setFormData({ ...formData, image: compressedImage });
+      setFormData((prev) => ({ ...prev, image: compressedImage }));
     }
+    e.target.value = '';
   };
 
   const saveItem = () => {
@@ -312,14 +313,23 @@ export default function SmartWardrobeApp() {
       <div className="p-5 overflow-y-auto pb-24 flex-1 space-y-5">
         <div>
           <label className="block text-sm font-bold text-slate-700 mb-2">Hình ảnh đồ vật</label>
-          <label className="block relative w-full h-48 bg-slate-50 rounded-xl overflow-hidden border-2 border-dashed border-slate-300 flex items-center justify-center cursor-pointer hover:bg-slate-100 transition">
+          <div className="relative w-full h-48 bg-slate-50 rounded-xl overflow-hidden border-2 border-dashed border-slate-300 flex items-center justify-center">
             {formData.image ? (
               <img src={formData.image} alt="Preview" className="w-full h-full object-cover" />
             ) : (
-              <div className="text-center text-slate-500"><Camera size={40} className="mx-auto mb-2 text-indigo-400" /><span className="text-sm font-medium">Chạm để chụp / Tải ảnh</span></div>
+              <div className="text-center text-slate-500"><Camera size={40} className="mx-auto mb-2 text-indigo-400" /><span className="text-sm font-medium">Chưa có ảnh</span></div>
             )}
-            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageUpload} />
-          </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <label className="flex items-center justify-center gap-2 p-3 bg-indigo-600 text-white rounded-xl font-bold text-sm cursor-pointer active:scale-95 transition">
+              <Camera size={18} /> Chụp ảnh
+              <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleImageUpload} />
+            </label>
+            <label className="flex items-center justify-center gap-2 p-3 bg-slate-100 text-indigo-700 border border-indigo-200 rounded-xl font-bold text-sm cursor-pointer active:scale-95 transition">
+              <ImageIcon size={18} /> Chọn từ thư viện
+              <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            </label>
+          </div>
         </div>
 
         <div>
